@@ -37,8 +37,8 @@ To run it without Docker you need **PHP 8.3+** and **Node.js 20.19+ or 22.12+**.
 
 ```sh
 git clone https://github.com/mceej/pdms_front-end.git
-cd pdms_front-end
-cp .env.example .env
+cd dswd_repository
+docker compose up
 ```
 
 Two files are needed, and **neither belongs in git**:
