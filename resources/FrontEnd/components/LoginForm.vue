@@ -1,15 +1,16 @@
 <template>
     <form class="login-form" @submit.prevent="login">
         <div class="form-group">
-            <label for="username">Username</label>
+            <label for="email">Email</label>
             <input
-                id="username"
-                v-model="username"
-                type="text"
-                placeholder="Username"
-                :class="{ 'input-error': errors.username }"
+                id="email"
+                v-model="email"
+                type="email"
+                placeholder="Email"
+                autocomplete="username"
+                :class="{ 'input-error': errors.email }"
             />
-            <p v-if="errors.username" class="error-text">The username field is required.</p>
+            <p v-if="errors.email" class="error-text">The email field is required.</p>
         </div>
 
         <div class="form-group">
@@ -19,10 +20,13 @@
                 v-model="password"
                 type="password"
                 placeholder="Password"
+                autocomplete="current-password"
                 :class="{ 'input-error': errors.password }"
             />
             <p v-if="errors.password" class="error-text">The password field is required.</p>
         </div>
+
+        <p v-if="signInError" class="error-text">{{ signInError }}</p>
 
         <div class="form-options">
             <label class="checkbox-label">
@@ -36,7 +40,7 @@
             <p v-if="errors.privacyPolicy" class="error-text">You must agree to the Privacy Policy.</p>
         </div>
 
-        <button type="submit">Login</button>
+        <button type="submit" :disabled="isSigningIn">Login</button>
 
         <p class="help-text">
             Need help? Send a ticket at
@@ -47,21 +51,39 @@
 
 <script setup>
 import { reactive, ref } from 'vue';
+import { signIn } from '../auth/session.js';
 
 const emit = defineEmits(['authenticated']);
-const username = ref('');
+const email = ref('');
 const password = ref('');
 const hasAgreedToPrivacyPolicy = ref(false);
-const errors = reactive({ username: false, password: false, privacyPolicy: false });
+const errors = reactive({ email: false, password: false, privacyPolicy: false });
+const signInError = ref('');
+const isSigningIn = ref(false);
 
-const login = () => {
-    errors.username = !username.value;
+const login = async () => {
+    errors.email = !email.value;
     errors.password = !password.value;
     errors.privacyPolicy = !hasAgreedToPrivacyPolicy.value;
+    signInError.value = '';
 
-    if (!errors.username && !errors.password && !errors.privacyPolicy) {
-        emit('authenticated');
+    if (errors.email || errors.password || errors.privacyPolicy) {
+        return;
     }
+
+    isSigningIn.value = true;
+
+    const result = await signIn(email.value.trim(), password.value);
+
+    isSigningIn.value = false;
+
+    if (result.user) {
+        emit('authenticated', result.user);
+        return;
+    }
+
+    signInError.value = result.error;
+    password.value = '';
 };
 </script>
 
@@ -108,6 +130,7 @@ const login = () => {
 
 .checkbox-label input {
     margin-top: 2px;
+    accent-color: #3730a3;
 }
 
 .checkbox-label a {
@@ -117,7 +140,7 @@ const login = () => {
 }
 
 .checkbox-error {
-    accent-color: #ef4444;
+    accent-color: #3730a3;
 }
 
 button {
@@ -130,6 +153,11 @@ button {
     cursor: pointer;
     font-size: 15px;
     font-weight: 600;
+}
+
+button:disabled {
+    opacity: 0.7;
+    cursor: progress;
 }
 
 button:hover {
@@ -158,3 +186,4 @@ button:hover {
     font-size: 12px;
 }
 </style>
+

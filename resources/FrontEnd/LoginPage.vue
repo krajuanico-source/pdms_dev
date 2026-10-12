@@ -14,7 +14,7 @@
                     <p>Please login to your account to continue</p>
                 </div>
 
-                <LoginForm @authenticated="emit('authenticated')" />
+                <LoginForm @authenticated="(user) => emit('authenticated', user)" />
             </div>
 
             <div class="right-panel" aria-hidden="true">
@@ -150,6 +150,6 @@ const emit = defineEmits(['authenticated']);
     padding: 30px 0px 0px 0px;
     font-family: 'Arial Black';
     letter-spacing: -1px;
-    
+
 }
 </style>
