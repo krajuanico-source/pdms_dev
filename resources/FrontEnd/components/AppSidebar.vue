@@ -1,5 +1,7 @@
+
 <template>
     <aside ref="sidebarRoot" :class="['role-sidebar', { expanded: sidebarExpanded }]" @click="toggleOnBlankArea">
+>>>>>>> a2d4feaea0397b58e880a9277f05945a2bba0d54
         <div class="sidebar-brand">
             <img src="/logo/dswdsidebarlogo.png" alt="DSWD logo" />
             <span v-if="sidebarExpanded">DSWD Assist Track</span>
@@ -87,7 +89,9 @@ onUnmounted(() => document.removeEventListener('pointerdown', collapseOnOutsideP
     height: 100vh;
     padding: 12px 7px;
     overflow: visible;
+
     background: #2E3192;
+
     color: #fff;
     transition: width 180ms ease, flex-basis 180ms ease;
 }

@@ -175,10 +175,7 @@
                     <span class="payout-site-label">Payout Site</span>
                     <button
                         type="button"
-                        :class="[
-                            'payout-trigger',
-                            { 'payout-invalid': payoutError, 'payout-open': payoutOpen },
-                        ]"
+
                         :aria-expanded="payoutOpen"
                         @click="payoutOpen = !payoutOpen"
                     >
