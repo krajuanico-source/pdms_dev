@@ -1,6 +1,15 @@
 ﻿﻿<template>
     <div class="dashboard-page">
         <div class="dashboard-shell">
+            <p v-if="loadError" class="dashboard-error" role="alert">
+                <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+                {{ loadError }}
+                <button type="button" @click="fetchDashboard">Try again</button>
+            </p>
+            <p v-for="warning in loadWarnings" :key="warning" class="dashboard-note">
+                <i class="pi pi-info-circle" aria-hidden="true"></i>
+                {{ warning }}
+            </p>
             <header class="dashboard-header">
                 <div class="header-content">
                     <span class="brand">
@@ -26,7 +35,7 @@
                             </div>
                             <div class="header-updated">
                                 <span><i class="pi pi-clock"></i> Last Updated</span>
-                                <strong>{{ formatUpdatedAt(currentTime) }}</strong>
+                                <strong>{{ formatUpdatedAt(lastUpdated) }}</strong>
                             </div>
                         </div>
                     </div>
@@ -107,11 +116,11 @@
 
             <DashboardOverview
                 :total-target="totalTarget"
-                :total-disbursed="totalDisbursed"
                 :total-paid-count="totalPaidCount"
-                :total-balance="totalBalance"
-                :unpaid-balance="unpaidBalance"
-                :unpaid-disbursed="unpaidDisbursed"
+                :total-remaining="totalRemaining"
+                :total-amount-to-disburse="totalBalance"
+                :total-disbursed="totalDisbursed"
+                :total-unpaid-disbursed="unpaidBalance"
             />
 
             <!-- Table (with Total row) + Progress Overview merged into one container -->
@@ -149,9 +158,11 @@
                     :active-level="activeLevel"
                     :scope-name="scopeName"
                     :extra-stat="extraStat"
+                    :has-pending-range="hasPendingRange"
                     @update:dateFrom="(value) => { dateFrom = value; applyDateRange('from'); }"
                     @update:dateTo="(value) => { dateTo = value; applyDateRange('to'); }"
-                    @apply="applyFilters"
+                    @apply="commitDateRange"
+                    @clear="clearDateRange"
                 />
             </div>
         </div>
@@ -164,10 +175,10 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
-import { fetchPayoutDashboard } from '../mock/payoutDashboard.js';
 import ComparisonCharts from './ComparisonCharts.vue';
 import DashboardOverview from './DashboardOverview.vue';
 import DashboardTable from './DashboardTable.vue';
+import { fetchDashboardMetrics, subscribeToChanges } from '../data/metrics.js';
 
 const activeTab = ref('AICS');
 const disasterName = ref('');
@@ -181,18 +192,21 @@ const payoutSiteFilter = ref('');
 const municipalitySearch = ref('');
 const dateFrom = ref('');
 const dateTo = ref('');
+const appliedFrom = ref('');
+const appliedTo = ref('');
 const appliedDateLabel = ref('as of 9/14/2026 | 10:30:23 AM');
-const currentTime = ref(new Date().toLocaleString());
-let clockTimer;
 
 const formatCount = (value) => {
     if (value === null || value === undefined || value === '' || value === '-----') return '0';
     return Number(value).toLocaleString();
 };
 
+// When the figures last changed, which is the newest import or target edit —
+// not the time right now, which says nothing about how fresh the data is.
 const formatUpdatedAt = (value) => {
+    if (value === null || value === undefined || value === '') return 'never';
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
+    if (Number.isNaN(date.getTime())) return String(value);
     return `${date.toLocaleDateString('en-US')} | ${date.toLocaleTimeString('en-US', {
         hour: 'numeric',
         minute: '2-digit',
@@ -240,9 +254,25 @@ const closeDisasterMenuOnOutsideClick = (event) => {
     }
 };
 
+const emptyKpi = () => ({
+    totalBalance: 0,
+    targetBeneficiaries: 0,
+    totalPaid: 0,
+    totalDisbursed: 0,
+    unpaidBalance: 0,
+    unpaidBeneficiaries: 0,
+    progress: 0,
+});
+
 const apiRows = ref([]);
+// The Total row the server worked out for exactly the rows it sent.
+const apiTotal = ref(null);
+const apiKpi = ref(emptyKpi());
 const apiLoaded = ref(false);
-const apiSummary = ref({ target: 0, paid: 0, remaining: 0, target_amount: 0, amount_disbursed: 0, unpaid_amount: 0, progress: 0 });
+const loadError = ref('');
+// Things the figures cannot say for themselves, such as targets left out.
+const loadWarnings = ref([]);
+const lastUpdated = ref(null);
 const apiDisasterTypes = ref([]);
 const disasterOptions = computed(() => [
     ...new Set([
@@ -265,75 +295,18 @@ const selectedProvince = ref(null);
 const selectedMunicipality = ref(null);
 const selectedBarangay = ref(null);
 
-const createDummyProvinces = () => {
-        const letters = ['A', 'B', 'C', 'D', 'E'];
-        const provinceTargets = [5890, 5000, 5700, 5000, 5890];
-        const provincePaid = [2500, 3750, 3980, 3750, 2500];
-
-        return letters.map((provinceLetter, provinceIndex) => ({
-                name: `Province ${provinceLetter}`,
-                target: provinceTargets[provinceIndex],
-                paid: provincePaid[provinceIndex],
-                municipalities: letters.map((municipalityLetter, municipalityIndex) => {
-                        const target = 900 + (municipalityIndex * 120) + (provinceIndex * 80);
-                        const paid = Math.round(target * ([0.42, 0.55, 0.68, 0.75, 0.84][municipalityIndex]));
-
-                        return {
-                                name: `Municipality ${municipalityLetter}`,
-                                target,
-                                paid,
-                                payoutSite: `Site ${(municipalityIndex % 3) + 1}`,
-                                barangays: letters.map((barangayLetter, barangayIndex) => {
-                                        const barangayTarget = 180 + (barangayIndex * 55) + (municipalityIndex * 30);
-                                        const barangayPaid = Math.round(barangayTarget * ([0.38, 0.5, 0.62, 0.74, 0.86][barangayIndex]));
-
-                                        return {
-                                                name: `Barangay ${barangayLetter}`,
-                                                target: barangayTarget,
-                                                paid: barangayPaid,
-                                                beneficiaries: barangayPaid,
-                                        };
-                                }),
-                        };
-                }),
-        }));
-};
-
-const dashboardData = {
-        AICS: { target: 27480, provinces: createDummyProvinces() },
-        ECT: { target: 27480, provinces: createDummyProvinces() },
-};
-
-const activeData = computed(() => dashboardData[activeTab.value]);
-
-const totalTarget = computed(() => apiLoaded.value ? apiSummary.value.target : activeData.value.target);
-const totalDisbursed = computed(() => {
-    if (apiLoaded.value) return `₱${Number(apiSummary.value.amount_disbursed).toLocaleString()}`;
-    const sum = activeData.value.provinces.reduce((acc, p) => acc + p.paid, 0);
-    return sum > 0 ? `₱${sum.toLocaleString()}` : '-----';
-});
-const totalPaidCount = computed(() => {
-    if (apiLoaded.value) return apiSummary.value.paid;
-    return activeData.value.provinces.reduce((acc, p) => acc + p.paid, 0);
-});
-const totalBalance = computed(() => {
-    if (apiLoaded.value) return `₱${Number(apiSummary.value.target_amount || 0).toLocaleString()}`;
-    return `₱${Number(totalTarget.value || 0).toLocaleString()}`;
-});
-const unpaidBalance = computed(() => {
-    if (apiLoaded.value) return `₱${Math.max(Number(apiSummary.value.target_amount || 0) - Number(apiSummary.value.amount_disbursed || 0), 0).toLocaleString()}`;
-    return formatCurrency(Math.max(Number(totalTarget.value || 0) - Number(totalPaidCount.value || 0), 0));
-});
-const unpaidDisbursed = computed(() => {
-    if (apiLoaded.value) return `₱${Number(apiSummary.value.unpaid_amount || 0).toLocaleString()}`;
-    return formatCurrency(Math.max(Number(totalTarget.value || 0) - Number(totalPaidCount.value || 0), 0));
-});
-const dashboardProgress = computed(() => {
-    if (apiLoaded.value) return apiSummary.value.progress;
-    const target = totalTarget.value || 0;
-    const paidSum = activeData.value.provinces.reduce((acc, p) => acc + p.paid, 0);
-    return target ? Math.round((paidSum / target) * 100) : 0;
-});
+/* ---------- The six cards at the top ----------
+   Every one of them comes from the server, worked out for the place being
+   looked at. The three counting people and the three counting pesos are
+   deliberately separate figures: how many are still to be paid and how much is
+   still to be moved are different questions. */
+const totalTarget = computed(() => apiKpi.value.targetBeneficiaries);
+const totalPaidCount = computed(() => apiKpi.value.totalPaid);
+const totalRemaining = computed(() => apiKpi.value.unpaidBeneficiaries);
+const totalBalance = computed(() => formatCurrency(apiKpi.value.totalBalance));
+const totalDisbursed = computed(() => formatCurrency(apiKpi.value.totalDisbursed));
+const unpaidBalance = computed(() => formatCurrency(apiKpi.value.unpaidBalance));
+const dashboardProgress = computed(() => Math.round(apiKpi.value.progress));
 
 const formatCurrency = (value) => `₱${Number(value || 0).toLocaleString()}`;
 
@@ -344,42 +317,44 @@ const activeLevel = computed(() => {
   return 'province';
 });
 
-const currentTableRows = computed(() => {
-    if (apiLoaded.value) {
-        const search = municipalitySearch.value.trim().toLowerCase();
-        return activeLevel.value === 'municipality' && search
-            ? apiRows.value.filter((row) => row.name.toLowerCase().includes(search))
-            : apiRows.value;
-    }
+// Searching for a municipality narrows the rows here rather than asking the
+// server again, so typing stays instant.
+const municipalityFilter = computed(
+    () => activeLevel.value === 'municipality' ? municipalitySearch.value.trim().toLowerCase() : ''
+);
 
-    if (activeLevel.value === 'province') return activeData.value.provinces;
-    if (activeLevel.value === 'municipality') {
-        const munis = selectedProvince.value?.municipalities || [];
-        const filteredBySite = payoutSiteFilter.value
-            ? munis.filter((m) => m.payoutSite === payoutSiteFilter.value)
-            : munis;
-        const search = municipalitySearch.value.trim().toLowerCase();
-        return search
-            ? filteredBySite.filter((municipality) => municipality.name.toLowerCase().includes(search))
-            : filteredBySite;
-    }
-    if (activeLevel.value === 'barangay') return selectedMunicipality.value?.barangays || [];
-    return [];
+const currentTableRows = computed(() => {
+    const search = municipalityFilter.value;
+
+    return search === ''
+        ? apiRows.value
+        : apiRows.value.filter((row) => row.name.toLowerCase().includes(search));
 });
 
 const rowsWithProgress = computed(() =>
   currentTableRows.value.map((row) => ({
     ...row,
-    progress: row.target ? Math.round((row.paid / row.target) * 100) : 0,
+    progress: Math.round(row.progress || 0),
   }))
 );
 
-const totalTableTarget = computed(() =>
-  currentTableRows.value.reduce((sum, r) => sum + (r.target || 0), 0)
-);
-const totalTablePaid = computed(() =>
-  currentTableRows.value.reduce((sum, r) => sum + (r.paid || 0), 0)
-);
+/* ---------- Total row ----------
+   The server sends the Total for the rows it sent. A municipality search hides
+   some of them in the browser, so while one is in use the footer has to add up
+   what is actually on screen instead. */
+const tableTotal = computed(() => {
+    if (apiTotal.value !== null && municipalityFilter.value === '') {
+        return { target: apiTotal.value.target, paid: apiTotal.value.paid };
+    }
+
+    return {
+        target: currentTableRows.value.reduce((sum, row) => sum + (row.target || 0), 0),
+        paid: currentTableRows.value.reduce((sum, row) => sum + (row.paid || 0), 0),
+    };
+});
+
+const totalTableTarget = computed(() => tableTotal.value.target);
+const totalTablePaid = computed(() => tableTotal.value.paid);
 const totalProgress = computed(() =>
   totalTableTarget.value ? Math.round((totalTablePaid.value / totalTableTarget.value) * 100) : 0
 );
@@ -433,12 +408,7 @@ const extraStat = computed(() => {
   return null;
 });
 
-const payoutSiteOptions = computed(() => {
-    if (apiLoaded.value) return apiPayoutSites.value;
-    if (!selectedProvince.value) return [];
-    const sites = new Set(selectedProvince.value.municipalities.map((m) => m.payoutSite));
-    return Array.from(sites);
-});
+const payoutSiteOptions = computed(() => apiPayoutSites.value);
 
 const chartMarkers = [200, 150, 100, 50, 0];
 const comparisonPalette = ['#2588d2', '#f08a24', '#25a269', '#8a63d2', '#d14d72'];
@@ -461,21 +431,37 @@ const breadcrumbItems = computed(() => {
 
 const fetchDashboard = async () => {
     const filters = { program: activeTab.value };
-    if (selectedDisasterType.value) filters.disaster_type = selectedDisasterType.value;
-    if (selectedAssistanceType.value) filters.assistance_type = selectedAssistanceType.value;
-    if (selectedProvince.value?.id) filters.province_id = selectedProvince.value.id;
-    if (selectedMunicipality.value?.id) filters.municipality_id = selectedMunicipality.value.id;
-    if (selectedBarangay.value?.id) filters.barangay_id = selectedBarangay.value.id;
-    if (payoutSiteFilter.value) filters.payout_site = payoutSiteFilter.value;
-    if (dateFrom.value) filters.from = dateFrom.value;
-    if (dateTo.value) filters.to = dateTo.value;
+    if (selectedDisasterType.value) filters.disasterType = selectedDisasterType.value;
+    if (selectedAssistanceType.value) filters.assistanceType = selectedAssistanceType.value;
+    if (selectedProvince.value?.id) filters.provinceId = selectedProvince.value.id;
+    if (selectedMunicipality.value?.id) filters.municipalityId = selectedMunicipality.value.id;
+    if (selectedBarangay.value?.id) filters.barangayId = selectedBarangay.value.id;
+    if (payoutSiteFilter.value) filters.payoutSite = payoutSiteFilter.value;
+    if (appliedFrom.value) filters.from = appliedFrom.value;
+    if (appliedTo.value) filters.to = appliedTo.value;
 
-    const payload = await fetchPayoutDashboard(filters);
-    apiRows.value = payload.rows || [];
-    apiSummary.value = payload.summary || apiSummary.value;
-    apiDisasterTypes.value = payload.disaster_types || [];
-    apiPayoutSites.value = payload.payout_sites || [];
-    apiLoaded.value = Boolean(apiRows.value.length);
+    const result = await fetchDashboardMetrics(filters);
+
+    if (! result.ok) {
+        loadError.value = result.message;
+        loadWarnings.value = [];
+        apiRows.value = [];
+        apiTotal.value = null;
+        apiKpi.value = emptyKpi();
+        apiLoaded.value = true;
+
+        return;
+    }
+
+    apiRows.value = result.rows;
+    apiTotal.value = result.total;
+    apiKpi.value = result.kpi;
+    apiDisasterTypes.value = result.disasterTypes;
+    apiPayoutSites.value = result.payoutSites;
+    lastUpdated.value = result.lastUpdated;
+    loadWarnings.value = result.warnings;
+    loadError.value = '';
+    apiLoaded.value = true;
 };
 
 const handleRowClick = async (row) => {
@@ -545,32 +531,54 @@ const setTab = (tab) => {
 
 const applyFilters = () => {
     fetchDashboard();
-    if (dateFrom.value && dateTo.value) {
-        appliedDateLabel.value = `from ${dateFrom.value} to ${dateTo.value}`;
+    if (appliedFrom.value && appliedTo.value) {
+        appliedDateLabel.value = `from ${appliedFrom.value} to ${appliedTo.value}`;
     } else {
-        appliedDateLabel.value = 'as of 9/14/2026 | 10:30:23 AM';
+        appliedDateLabel.value = `as of ${new Date().toLocaleString()}`;
     }
 };
 
+// Typing a date only changes what is pending; Apply is what commits it.
 const applyDateRange = (changedField) => {
     if (dateFrom.value && dateTo.value && dateTo.value < dateFrom.value) {
         if (changedField === 'from') dateTo.value = dateFrom.value;
         else dateFrom.value = dateTo.value;
     }
+};
+
+const hasPendingRange = computed(
+    () => dateFrom.value !== appliedFrom.value || dateTo.value !== appliedTo.value
+);
+
+const commitDateRange = () => {
+    appliedFrom.value = dateFrom.value;
+    appliedTo.value = dateTo.value;
     applyFilters();
+};
+
+const clearDateRange = () => {
+    dateFrom.value = '';
+    dateTo.value = '';
+    commitDateRange();
 };
 
 onMounted(() => document.addEventListener('click', closeDisasterMenuOnOutsideClick));
 onUnmounted(() => document.removeEventListener('click', closeDisasterMenuOnOutsideClick));
 
-onMounted(() => fetchDashboard().catch((error) => console.error(error)));
+onMounted(() => fetchDashboard());
+
+/* ---------- Staying up to date ----------
+   Asking the server for finished figures costs the page the live updates the
+   old subscription gave it, so this watches for the two things that move them —
+   an import arriving or leaving, and a target being edited — and asks again.
+   Neither watch downloads the payout records. */
+let stopWatching = () => {};
+
 onMounted(() => {
-    clockTimer = window.setInterval(() => {
-        currentTime.value = new Date().toLocaleString();
-    }, 1000);
+    stopWatching = subscribeToChanges(() => fetchDashboard());
 });
 
-onUnmounted(() => window.clearInterval(clockTimer));
+onUnmounted(() => stopWatching());
 </script>
 
 <style scoped>
@@ -992,5 +1000,49 @@ button:hover { background: #2e2789; }
       margin: 36px -16px -24px;
             padding: 8px 12px;
   }
+}
+
+.dashboard-error {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 16px;
+    padding: 12px 16px;
+    border: 1px solid #f2b8b5;
+    border-radius: 8px;
+    background: #fdecec;
+    color: #b3261e;
+    font-size: 14px;
+}
+
+/* Not a failure: the figures loaded, but something about them is worth saying. */
+.dashboard-note {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 16px;
+    padding: 10px 16px;
+    border: 1px solid #f3d9a4;
+    border-radius: 8px;
+    background: #fdf6e7;
+    color: #8a5a00;
+    font-size: 14px;
+}
+
+.dashboard-error button {
+    margin-left: auto;
+    padding: 6px 12px;
+    border: 1px solid #b3261e;
+    border-radius: 6px;
+    background: #fff;
+    color: #b3261e;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+}
+
+.dashboard-error button:hover {
+    background: #b3261e;
+    color: #fff;
 }
 </style>

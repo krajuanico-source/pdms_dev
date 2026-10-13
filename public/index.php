@@ -9,6 +9,12 @@
 
 const ENTRY = 'resources/FrontEnd/app.js';
 
+// A payout dashboard has no business being framed by another site, guessed at
+// by a browser, or naming itself in the address it sends somewhere else.
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
+header('Referrer-Policy: same-origin');
+
 /**
  * Build the <script>/<link> tags for the Vue app.
  *
@@ -16,7 +22,8 @@ const ENTRY = 'resources/FrontEnd/app.js';
  */
 function assetTags(): string
 {
-    $devServer = rtrim((string) getenv('VITE_DEV_SERVER'), '/');
+    $config = require __DIR__ . '/../config.php';
+    $devServer = rtrim((string) $config['viteDevServer'], '/');
 
     if ($devServer !== '') {
         return sprintf('<script type="module" src="%s/@vite/client"></script>', $devServer)
